@@ -120,3 +120,15 @@ def test_library_path(tmp_path_factory):
 
 def test_script_runtime_error_exported():
     pyjq.ScriptRuntimeError # exported
+
+
+@pytest.mark.parametrize("iterator",
+    (
+        iter([b'{"a": "b"}']),
+        iter([b'{"a": "', b'b"}']),
+        iter([b'{', b'"', b'a', b'"', b':', b' ', b'"', b'b', b'"', b'}']),
+    ),
+)
+def test_iterator(iterator):
+    res = pyjq.compile('.a').alli(iterator)
+    assert list(res) == ['b']

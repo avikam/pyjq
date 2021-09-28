@@ -37,6 +37,7 @@ cdef extern from "jv.h":
 
     void jv_free(jv)
 
+    jv jv_invalid()
     jv jv_null()
     jv jv_bool(int)
 
@@ -70,9 +71,10 @@ cdef extern from "jv.h":
     cdef struct jv_parser:
         pass
 
-    jv_parser* jv_parser_new(jv_parser_flags)
+    jv_parser* jv_parser_new(int)
+    int jv_parser_remaining(jv_parser*)
     void jv_parser_free(jv_parser*)
-    void jv_parser_set_buf(jv_parser*, const char*, int, int)
+    void jv_parser_set_buf(jv_parser*, const char*, int, bint)
     jv jv_parser_next(jv_parser*)
 
 
@@ -161,6 +163,10 @@ cdef void Script_error_cb(void* x, jv err):
     Script._error_cb(<object>x, err)
 
 
+cdef jv_is_valid(jv value):
+    kind = jv_get_kind(value)
+    return kind != JV_KIND_INVALID
+
 cdef class Script:
     'Compiled jq script object'
     cdef object _errors
@@ -193,27 +199,33 @@ cdef class Script:
     def __dealloc__(self):
         jq_teardown(&self._jq)
 
+    def alli(self, iterable, slurp = False):
+        # cdef jv slurped = jv_invalid()
+        cdef jv_parser* parser = jv_parser_new(0)
+        cdef bint is_last = False
+        # cdef bint has_more = False
+        cdef const char* c_buf
+
+        while not is_last:
+            if jv_parser_remaining(parser) == 0:
+                try:
+                    is_last = False
+                    py_buf = next(iterable)
+                except StopIteration:
+                    is_last = True
+                    py_buf = b''
+
+                c_buf = py_buf
+                jv_parser_set_buf(parser, c_buf, len(py_buf), not is_last)
+
+            value = jv_parser_next(parser)
+            if jv_is_valid(value):
+                yield from process(self._jq, value)
+
     def all(self, pyobj):
         "Transform object by jq script, returning all results as list"
         cdef jv value = pyobj_to_jv(pyobj)
-        jq_start(self._jq, value, 0)
-        cdef list output = []
-
-        while True:
-            result = jq_next(self._jq)
-            try:
-                kind = jv_get_kind(result)
-                if kind == JV_KIND_INVALID:
-                    if not jv_invalid_has_msg(jv_copy(result)):
-                        break
-                    m = jv_invalid_get_msg(jv_copy(result))
-                    e = str(jv_to_pyobj(m))
-                    raise ScriptRuntimeError(e)
-                else:
-                    output.append(jv_to_pyobj(result))
-            finally:
-                jv_free(result)
-        return output
+        return process(self._jq, value)
 
     apply = all
 
@@ -238,3 +250,23 @@ cdef class Script:
         elif len(ret) > 1:
             raise IndexError("Result of jq have multiple elements")
         return ret[0]
+
+cdef list process(jq_state* jq, jv value):
+    jq_start(jq, value, 0)
+    cdef list output = []
+
+    while True:
+        result = jq_next(jq)
+        try:
+            kind = jv_get_kind(result)
+            if kind == JV_KIND_INVALID:
+                if not jv_invalid_has_msg(jv_copy(result)):
+                    break
+                m = jv_invalid_get_msg(jv_copy(result))
+                e = str(jv_to_pyobj(m))
+                raise ScriptRuntimeError(e)
+            else:
+                output.append(jv_to_pyobj(result))
+        finally:
+            jv_free(result)
+    return output
