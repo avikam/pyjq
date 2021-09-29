@@ -122,13 +122,55 @@ def test_script_runtime_error_exported():
     pyjq.ScriptRuntimeError # exported
 
 
-@pytest.mark.parametrize("iterator",
+@pytest.mark.parametrize("query,iterator,result",
     (
-        iter([b'{"a": "b"}']),
-        iter([b'{"a": "', b'b"}']),
-        iter([b'{', b'"', b'a', b'"', b':', b' ', b'"', b'b', b'"', b'}']),
+        ('.a', iter([b'{"a": "b"}']), ['b']),
+        ('.a', iter([b'{"a": "', b'b"}']), ['b']),
+        ('.a', iter([b'{', b'"', b'a', b'"', b':', b' ', b'"', b'b', b'"', b'}']), ['b']),
+        ('.a', iter([b'{"a": "b"}', b'{"a": "c"}']), ['b', 'c']),
+        ('.a', iter([b'{"a": "b"}', b'{"a":', b' "c"}']), ['b', 'c']),
     ),
 )
-def test_iterator(iterator):
-    res = pyjq.compile('.a').alli(iterator)
-    assert list(res) == ['b']
+def test_iterator(query, iterator, result):
+    res = pyjq.compile(query).iall(iterator)
+    assert list(res) == result
+
+
+@pytest.mark.parametrize("query,iterator,expected",
+    (
+        ('.', iter([b'{"a": "b"}']), (
+                [{"a": "b"}],
+        )),
+        ('.', iter([b'{"a": "b"}', b'{"a": "b"}']), (
+                [{"a": "b"}, {"a": "b"}],
+        )),
+        ('.[].a', iter([b'{"a": "', b'b"}']), (
+                'b',
+        )),
+        ('.[].a', iter([b'{', b'"', b'a', b'"', b':', b' ', b'"', b'b', b'"', b'}']), (
+                'b',
+        )),
+        ('.[].a', iter([b'{"a": "b"}', b'{"a": "c"}']), (
+                'b',
+                'c'
+        )),
+        ('map(.a) | add', iter([b'{"a": "b"}', b'{"a":', b' "c"}']), (
+                'bc',
+        )),
+        ('map(.a)', iter([b'{"a": "b"}', b'{"a":', b' "c"}']), (
+                ['b', 'c'],
+        )),
+        ('map(.a) | add', iter([b'{"a": [1,2,3]}', b'{"a": [4,5,6]}']), (
+            [1, 2, 3, 4, 5, 6],
+        )),
+    ),
+)
+def test_iterator_slurped(query, iterator, expected):
+    res = pyjq.compile(query).iall(iterator, slurp=True)
+
+    size = 0
+    for i, val in enumerate(res):
+        assert val == expected[i]
+        size = i+1
+
+    assert len(expected) == size, "expected more results"

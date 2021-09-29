@@ -199,11 +199,15 @@ cdef class Script:
     def __dealloc__(self):
         jq_teardown(&self._jq)
 
-    def alli(self, iterable, slurp = False):
-        # cdef jv slurped = jv_invalid()
+    def iall(self, iterable, slurp = False):
+        """
+        iterate over iterables, which is expected to produce a sequence bytes, and parse it.
+        use slurp=True for the `jq -s` functionality
+        """
+        cdef jv slurped = jv_invalid() if not slurp else jv_array()
+
         cdef jv_parser* parser = jv_parser_new(0)
         cdef bint is_last = False
-        # cdef bint has_more = False
         cdef const char* c_buf
 
         while not is_last:
@@ -219,8 +223,19 @@ cdef class Script:
                 jv_parser_set_buf(parser, c_buf, len(py_buf), not is_last)
 
             value = jv_parser_next(parser)
-            if jv_is_valid(value):
+
+            if slurp:
+                if jv_is_valid(value):
+                    slurped = jv_array_append(slurped, value)
+                    value = jv_invalid()
+                else:
+                    assert_no_has_message(value)
+
+            elif jv_is_valid(value):
                 yield from process(self._jq, value)
+
+        if slurp:
+            yield from process(self._jq, slurped)
 
     def all(self, pyobj):
         "Transform object by jq script, returning all results as list"
@@ -250,6 +265,13 @@ cdef class Script:
         elif len(ret) > 1:
             raise IndexError("Result of jq have multiple elements")
         return ret[0]
+
+cdef assert_no_has_message(jv value):
+    if not jv_invalid_has_msg(jv_copy(value)):
+        return
+    m = jv_invalid_get_msg(jv_copy(value))
+    e = str(jv_to_pyobj(m))
+    raise ScriptRuntimeError(e)
 
 cdef list process(jq_state* jq, jv value):
     jq_start(jq, value, 0)
